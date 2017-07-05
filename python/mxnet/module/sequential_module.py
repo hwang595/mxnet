@@ -25,6 +25,7 @@ class SequentialModule(BaseModule):
         super(SequentialModule, self).__init__(logger=logger)
         self._modules = []
         self._metas = []
+        self._module_idx_bias = []
 
         self._label_shapes = None
         self._data_shapes = None
@@ -132,6 +133,11 @@ class SequentialModule(BaseModule):
         assert self.binded
         return self._modules[-1].output_shapes
 
+    @property
+    def get_seq_module_length(self):
+        '''use for test of hwang's soft skill project, may not necessary'''
+        return len(self._modules)
+
     def get_params(self):
         """Gets current parameters.
 
@@ -153,8 +159,23 @@ class SequentialModule(BaseModule):
 
         return (arg_params, aux_params)
 
+    def fill_bias_list(self):
+        tmp_param_length = []
+        for module_idx, module in enumerate(self._modules):
+            tmp_param_length.append(len(module._exec_group.param_arrays))
+            if module_idx == 0:
+                self._module_idx_bias.append(0)
+            else:
+                self._module_idx_bias.append(self._module_idx_bias[module_idx-1]+tmp_param_length[module_idx-1])            
+        # index start from 0
+        #self._module_idx_bias = [idx if i ==0 else idx-1 for i, idx in enumerate(self._module_idx_bias)]
+        # debug printings 
+#        print(tmp_param_length)
+#        print('-----------------------------------------------------------------------------')
+#        exit()
+
     def init_params(self, initializer=Uniform(0.01), arg_params=None, aux_params=None,
-                    allow_missing=False, force_init=False, allow_extra=False):
+                    allow_missing=False, force_init=False):
         """Initializes parameters.
 
         Parameters
@@ -171,10 +192,6 @@ class SequentialModule(BaseModule):
             In this case, missing values will be filled with `initializer`.
         force_init : bool
             Default ``False``.
-        allow_extra : boolean, optional
-            Whether allow extra parameters that are not needed by symbol.
-            If this is True, no error will be thrown when arg_params or aux_params
-            contain extra parameters that is not needed by the executor.
         """
         if self.params_initialized and not force_init:
             return
@@ -183,7 +200,7 @@ class SequentialModule(BaseModule):
         for module in self._modules:
             module.init_params(initializer=initializer, arg_params=arg_params,
                                aux_params=aux_params, allow_missing=allow_missing,
-                               force_init=force_init, allow_extra=allow_extra)
+                               force_init=force_init)
 
         # make sure we do not have duplicated parameter names
         def _check_name(known_names, new_names, modules, i):
@@ -277,6 +294,9 @@ class SequentialModule(BaseModule):
             # then I do not need label either
             self._label_shapes = None
 
+        # fill _module_index_bias member in this class, only for hwang's straggler kill project
+        self.fill_bias_list()
+
     def init_optimizer(self, kvstore='local', optimizer='sgd',
                        optimizer_params=(('learning_rate', 0.01),),
                        force_init=False):
@@ -296,13 +316,20 @@ class SequentialModule(BaseModule):
             optimizer in the case an optimizer is already installed.
         """
         assert self.binded and self.params_initialized
+        # only for hwang's straggler soft kill project
+        #assert isinstance(kvstore, list)
         if self.optimizer_initialized and not force_init:
             self.logger.warning('optimizer already initialized, ignoring.')
             return
-
-        for module in self._modules:
-            module.init_optimizer(kvstore=kvstore, optimizer=optimizer,
+        '''
+        for module_idx, module in enumerate(self._modules):
+            module.init_optimizer(kvstore=kvstore[module_idx], optimizer=optimizer,
                                   optimizer_params=optimizer_params, force_init=force_init)
+        '''
+        for module_idx, module in enumerate(self._modules):
+            module.init_optimizer_sequential(kvstore=kvstore, optimizer=optimizer,
+                                  optimizer_params=optimizer_params, force_init=force_init,
+                                  index_bias=self._module_idx_bias[module_idx])
 
         self.optimizer_initialized = True
 
@@ -316,7 +343,6 @@ class SequentialModule(BaseModule):
             Default is ``None``, in which case `is_train` is take as ``self.for_training``.
         """
         assert self.binded and self.params_initialized
-
         # make a shallow copy, just to maintain necessary properties (if any) like
         # bucket_key, pad, etc.
         data_batch = copy.copy(data_batch)
@@ -342,6 +368,7 @@ class SequentialModule(BaseModule):
         assert self.binded and self.params_initialized
 
         for i_layer, module in reversed(list(zip(range(len(self._modules)), self._modules))):
+        #    print "ith layer: " + str(i_layer)
             module.backward(out_grads=out_grads)
             if i_layer == 0:
                 break
@@ -354,8 +381,8 @@ class SequentialModule(BaseModule):
         """
         assert self.binded and self.params_initialized and self.optimizer_initialized
 
-        for module in self._modules:
-            module.update()
+        for module_idx, module in enumerate(self._modules):
+            module.update_sequential(index_bias=self._module_idx_bias[module_idx])
 
     def get_outputs(self, merge_multi_context=True):
         """Gets outputs from a previous forward computation.

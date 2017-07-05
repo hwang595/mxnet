@@ -8,6 +8,7 @@ import logging
 import warnings
 from collections import namedtuple
 import numpy as np
+import mxnet as mx
 
 from . import io
 from . import nd
@@ -62,7 +63,7 @@ def _create_kvstore(kvstore, num_device, arg_params):
             kv = None
         else:
             kv = kvs.create(kvstore)
-            if kvstore == 'local':
+            if kvstore is 'local':
             # automatically select a proper local
                 max_size = max(np.prod(param.shape) for param in
                                arg_params.values())
@@ -77,40 +78,45 @@ def _create_kvstore(kvstore, num_device, arg_params):
     return (kv, update_on_kvstore)
 
 def _initialize_kvstore(kvstore, param_arrays, arg_params, param_names,
-                        update_on_kvstore):
+                        update_on_kvstore,index_bias=None):
     """Initialize kvstore"""
     for idx, param_on_devs in enumerate(param_arrays):
-        name = param_names[idx]
-        kvstore.init(name, arg_params[name])
-
+        kvstore.init(idx+index_bias, arg_params[param_names[idx]])
+ #       print("name of params: %s" % str(param_names[idx]))
         if update_on_kvstore:
-            kvstore.pull(name, param_on_devs, priority=-idx)
+            kvstore.pull(idx+index_bias, param_on_devs, priority=-(idx+index_bias))
+#    print("additional idx number: %s" % str(idx+1))
+#    kvstore.init(idx+1, mx.nd.zeros(1))
 
-def _update_params_on_kvstore(param_arrays, grad_arrays, kvstore, param_names):
+def _update_params_on_kvstore(param_arrays, grad_arrays, kvstore,
+                              index_bias=None):
     """Perform update of param_arrays from grad_arrays on kvstore."""
+#    test_out = mx.nd.ones(1)
     for index, pair in enumerate(zip(param_arrays, grad_arrays)):
         arg_list, grad_list = pair
         if grad_list[0] is None:
             continue
-        name = param_names[index]
         # push gradient, priority is negative index
-        kvstore.push(name, grad_list, priority=-index)
+        kvstore.push(index+index_bias, grad_list, priority=-(index+index_bias))
         # pull back the weights
-        kvstore.pull(name, arg_list, priority=-index)
+        kvstore.pull(index+index_bias, arg_list, priority=-(index+index_bias))
+#    kvstore.push(index+1, mx.nd.ones(1))
+#    kvstore.pull(index+1, out=test_out)
+#    print(test_out.asnumpy(), "test of output here!")
+#    print("=================================================================")
 
 def _update_params(param_arrays, grad_arrays, updater, num_device,
-                   kvstore=None, param_names=None):
+                   kvstore=None):
     """Perform update of param_arrays from grad_arrays not on kvstore."""
     for index, pair in enumerate(zip(param_arrays, grad_arrays)):
         arg_list, grad_list = pair
         if grad_list[0] is None:
             continue
         if kvstore:
-            name = param_names[index]
             # push gradient, priority is negative index
-            kvstore.push(name, grad_list, priority=-index)
+            kvstore.push(index, grad_list, priority=-index)
             # pull back the sum gradients, to the same locations.
-            kvstore.pull(name, grad_list, priority=-index)
+            kvstore.pull(index, grad_list, priority=-index)
         for k, p in enumerate(zip(arg_list, grad_list)):
             # faked an index here, to make optimizer create diff
             # state for the same index but on diff devs, TODO(mli)
@@ -248,14 +254,13 @@ def _train_multi_device(symbol, ctx, arg_names, param_names, aux_names,
                 if update_on_kvstore:
                     _update_params_on_kvstore(executor_manager.param_arrays,
                                               executor_manager.grad_arrays,
-                                              kvstore, executor_manager.param_names)
+                                              kvstore)
                 else:
                     _update_params(executor_manager.param_arrays,
                                    executor_manager.grad_arrays,
                                    updater=updater,
                                    num_device=len(ctx),
-                                   kvstore=kvstore,
-                                   param_names=executor_manager.param_names)
+                                   kvstore=kvstore)
 
                 if monitor is not None:
                     monitor.toc_print()
@@ -948,3 +953,4 @@ class FeedForward(BASE_ESTIMATOR):
                   eval_end_callback=eval_end_callback,
                   eval_batch_end_callback=eval_batch_end_callback)
         return model
+        
