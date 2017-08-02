@@ -78,7 +78,7 @@ def _create_kvstore(kvstore, num_device, arg_params):
     return (kv, update_on_kvstore)
 
 def _initialize_kvstore(kvstore, param_arrays, arg_params, param_names,
-                        update_on_kvstore,index_bias=None):
+                        update_on_kvstore,index_bias=0):
     """Initialize kvstore"""
     for idx, param_on_devs in enumerate(param_arrays):
         kvstore.init(idx+index_bias, arg_params[param_names[idx]])
@@ -89,7 +89,7 @@ def _initialize_kvstore(kvstore, param_arrays, arg_params, param_names,
 #    kvstore.init(idx+1, mx.nd.zeros(1))
 
 def _update_params_on_kvstore(param_arrays, grad_arrays, kvstore,
-                              index_bias=None):
+                              index_bias=0):
     """Perform update of param_arrays from grad_arrays on kvstore."""
 #    test_out = mx.nd.ones(1)
     for index, pair in enumerate(zip(param_arrays, grad_arrays)):
