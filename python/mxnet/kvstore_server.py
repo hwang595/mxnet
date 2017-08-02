@@ -52,6 +52,8 @@ class KVStoreServer(object):
         ...     if is_command x: controller(x)
         ...     else if is_key_value x: updater(x)
         """
+        print("Server runing happens here!")
+        print("==============================================================")
         _ctrl_proto = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
         check_call(_LIB.MXKVStoreRunServer(self.handle, _ctrl_proto(self._controller()), None))
 
